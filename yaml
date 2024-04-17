@@ -1,59 +1,83 @@
-# Build .NET Core Full
-# v2.0
+# Build .NET Core
+# v2.1
 # lucas.candemil@biz.com.br
 #
 parameters:
-  # The name of project to build
+  # Nome do projeto a ser construído
   projectName: 
-  # Feed where the package from
+  # Feed de onde vem o pacote
   feedName: 
-  # SonarQube parameter
+  # Parâmetro do SonarQube
   apiName: $(Build.Repository.Name)
-  # build in release or debug
-  buildConfiguration: 
-  # Variavel do dotnet
+  # Configuração de construção (Release ou Debug)
+  buildConfiguration: 'Release'
+# Variável do dotnet
   DOTNET_VERSION: ''
   DOMAIN_CS_PROJ: ''
 
 steps:
 - script: |
-  
+    # Encontra todos os arquivos .csproj com "Domain" no nome
     DOMAIN_CS_PROJ=$(find "$(Build.SourcesDirectory)" -type f -name "*.csproj" | grep "Domain")
-    if [ -n "$DOMAIN_CS_PROJ" ]; then
-      echo "Arquivo .csproj encontrado com 'domain' no nome: $DOMAIN_CS_PROJ"
-      # Extrai a versão do .NET do arquivo .csproj
-      DOTNET_VERSION=$(grep -oP '(?<=<TargetFramework>net)[0-9]+\.[0-9]+' "$DOMAIN_CS_PROJ")
-      echo "Versão do .NET encontrada: $DOTNET_VERSION"
-      echo "##vso[task.setvariable variable=DOTNET_VERSION]$DOTNET_VERSION"
-    else
-      echo "Nenhum arquivo .csproj encontrado com 'domain' no nome."
+    
+    # Se nenhum arquivo .csproj for encontrado na raiz, tente encontrar em subpastas
+    if [ -z "$DOMAIN_CS_PROJ" ]; then
+      DOMAIN_CS_PROJ=$(find "$(Build.SourcesDirectory)" -type f -name "*.csproj" -exec grep -l "Domain" {} +)
     fi
 
-  displayName: 'Extrair versão do .NET'
-   
-- task: NuGetToolInstaller@1
-  inputs:
-    versionSpec: '6.1'
-    checkLatest: false
+    # Se nenhum arquivo .csproj for encontrado com "Domain" no nome, procurar na pasta "Service"
+    if [ -z "$DOMAIN_CS_PROJ" ]; then
+      # Encontra todos os arquivos .csproj com "Service" no nome
+      SERVICE_CS_PROJ=$(find "$(Build.SourcesDirectory)" -type f -name "*.csproj" | grep "Service")
+    
+      # Se nenhum arquivo .csproj for encontrado na raiz, tente encontrar em subpastas
+      if [ -z "$SERVICE_CS_PROJ" ]; then
+        SERVICE_CS_PROJ=$(find "$(Build.SourcesDirectory)" -type f -name "*.csproj" -exec grep -l "Service" {} +)
+      fi
 
+      if [ -n "$SERVICE_CS_PROJ" ]; then
+        for proj_file in $SERVICE_CS_PROJ; do
+          echo "Arquivo .csproj encontrado com 'service' no nome: $proj_file"
+          DOTNET_VERSION=$(grep -oP '(?<=<TargetFramework>net)[0-9]+\.[0-9]+' "$proj_file")
+          echo "Versão do .NET encontrada para $proj_file: $DOTNET_VERSION"
+          echo "##vso[task.setvariable variable=DOTNET_VERSION]$DOTNET_VERSION"
+        done
+      else
+        echo "Nenhum arquivo .csproj encontrado com 'service' no nome."
+      fi
+    else
+      for proj_file in $DOMAIN_CS_PROJ; do
+        echo "Arquivo .csproj encontrado com 'domain' no nome: $proj_file"
+        DOTNET_VERSION=$(grep -oP '(?<=<TargetFramework>net)[0-9]+\.[0-9]+' "$proj_file")
+        echo "Versão do .NET encontrada para $proj_file: $DOTNET_VERSION"
+        echo "##vso[task.setvariable variable=DOTNET_VERSION]$DOTNET_VERSION"
+      done
+    fi
+  displayName: 'Extrair versão do .NET'
+
+  
 - task: UseDotNet@2
-  displayName: 'Use .NET Core sdk'
   inputs:
     packageType: 'sdk'
     version: '$(DOTNET_VERSION).x'
-    includePreviewVersions: true
+  displayName: 'Use .NET SDK'
+
+
+- task: NuGetToolInstaller@1
+  inputs:
+    versionSpec: '6.1.x' # Usar a versão mais recente
+    checkLatest: true
 
 - task: NuGetCommand@2
-  displayName: 'Nuget restore'
+  displayName: 'NuGet restore'
   inputs:
     command: 'restore'
     restoreSolution: '$(Build.SourcesDirectory)/**/*.sln'
     feedsToUse: 'select'
-    vstsFeed: '${{ parameters.FeedName }}'
+    vstsFeed: '$(feedName)'
     noCache: false
     disableParallelProcessing: false
 
-# 2. SonarQube Project preparation
 - task: SonarQubePrepare@5
   inputs:
     SonarQube: 'SonarQube Azure'
@@ -62,34 +86,27 @@ steps:
     projectName: '${{ parameters.apiName }}'
     extraProperties: 'sonar.branch.name=$(Build.SourceBranchName)'
 
-# 3. Build the project using ProjectName parameter
 - task: DotNetCoreCLI@2
-  displayName: 'Build ${{ parameters.buildConfiguration }}'
+  displayName: 'Build'
   inputs:
     command: 'build'
-    projects: '$(Build.SourcesDirectory)/**/*.csproj'
-    arguments: '--configuration ${{ parameters.buildConfiguration }} --no-restore'
+    projects: '**/*.csproj'
+    arguments: '--configuration $(buildConfiguration) '
 
-# 4. SonarQube Analyse
-- task: SonarQubeAnalyze@5
-
-# 5. Create a package to Publish 
 - task: DotNetCoreCLI@2
   displayName: 'Publish'
   inputs:
     command: 'publish'
     publishWebProjects: true
-    arguments: '--configuration ${{ parameters.buildConfiguration }} --output "$(build.artifactstagingdirectory)" --no-restore'
+    arguments: '--configuration $(buildConfiguration) --output "$(build.artifactstagingdirectory)"'
     workingDirectory: '$(System.DefaultWorkingDirectory)'
 
-# 6. Publish package on Artifact staging directory
 - task: PublishBuildArtifacts@1
   displayName: 'Publish Artifact'
   inputs:
     PathtoPublish: '$(build.artifactstagingdirectory)'
     artifactName: 'drop'
 
-# 7. Count Lines
 - script: |
     total_lines=$(git ls-files | xargs cat | wc -l)
     echo "Total lines in the repository: $total_lines"
