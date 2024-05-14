@@ -1,5 +1,5 @@
 # Build .NET Core
-# v2.1
+# v2.0
 # lucas.candemil@biz.com.br
 #
 parameters:
@@ -74,7 +74,7 @@ steps:
     command: 'restore'
     restoreSolution: '$(Build.SourcesDirectory)/**/*.sln'
     feedsToUse: 'select'
-    vstsFeed: '$(feedName)'
+    vstsFeed: '${{ parameters.FeedName }}'
     noCache: false
     disableParallelProcessing: false
 
